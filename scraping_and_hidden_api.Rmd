@@ -1,0 +1,305 @@
+---
+title: "Scraping and Hidden APIs"
+author: "Aidan Hughes"
+date: "2026-05-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Loading some of the libraries we'll need:
+
+```{r}
+# install.packages("tidyverse")
+# install.packages("lubridate")
+# install.packages("janitor")
+
+library(tidyverse)
+library(lubridate)
+library(janitor)
+```
+
+
+# Scraping and Obtaining Crappy Data
+
+Wouldn't it be nice if the data we wanted was always available online in a clean, downloadable format?
+
+Unfortunately, this is rarely the case. Data sets from government bodies and other websites are oftentimes provided without much thought toward allowing others to easily obtain and analyze the data themselves.
+
+Other times, there's a need to automate the collection of online data on a reapeatable, regular basis.
+
+When those problems arise, data journalists oftentimes turn to scraping and APIs to obtain data programmatically.
+
+In this session, we'll go over several methods for achieving those goals based on the complexity (aka crappiness) of the data source.
+
+We'll start with rvest, a simple tool for scraping relatively easy data from static web pages.
+
+After that, we'll practice using Playwright (using the R wrapper for the tool, rplaywright) to scrape crappier data from sources that would normally require a human to manually load or interact with the webpage.
+
+Then, we'll review how to extract data from PDFs using the pdftools library in R.
+
+Finally, we'll do a brief review of APIs—and finish with a demonstration of how you can identify and exploit hidden APIs that often feed data into webpages that simply can't be scraped otherwise.
+
+## A note on AI:
+
+LLMs and associated coding tools have advanced to the point that AI is now very effective at writing scrapers. Most of the scraping I do these days is aided by and/or significantly sped up by the use of Claude Code.
+
+That being said, these tools aren't perfect—and neither are our attempts to tell AI what exactly we're trying to do As a result, this presentation emphasizes becoming familiar with some basic concepts behind the tools and methods we're about to review. Once you have a solid understanding of those basics and what information you'll need to know/understand yourself, you'll be in a much stronger position to more effectively tell AI what you're trying to accomplish, guide it through those tasks, and troubleshoot with it when things get screwy.
+
+## Simple Scraping with rvest
+
+Load the rvest library: 
+```{r}
+#install.packages("rvest")
+library(rvest)
+```
+
+For this example, we’re going to work on loading a simple table of press releases from the Maryland State Courts. Let's store the url in the variable courts_url:
+
+```{r}
+courts_url <- "https://www.courts.state.md.us/media/news"
+```
+
+Now let's take a look at it in our browser:
+
+https://www.courts.state.md.us/media/news
+
+If we could download this information into the ideal data set, what would the columns be? (There are three on my mind... or four if you can anticipate what we'd ultimately want to have in our data).
+
+In our web browser, if we right-click anywhere on the page and select “view source” from the popup menu, we can see the source code—the HTML that actually makes up the webpage we normally see.
+
+HTML does to my brain something akin to what Greek letters in an equation do to me. As soon as I see it my brain short circuits a little bit. It's dense. There's a lot of *stuff* in there.
+
+But for our purposes, what we really want to pay attention to first are the different "tags" in this source code. They include things like:
+
+<thead> (aka table head)
+<tbody> (aka table body)
+<tr> (aka table row)
+
+Those tags are a starting point for us—and soon, our code—to identify the *stuff* in the webpage that represents the data we're trying to scrape.
+
+If we go back to the webpage, right-click, and select "Inspect", we can hover over specific parts of the source code and it'll highlight what parts of the webpage that specific section of the source code actually generates.
+
+Let’s write a bit of code to tell R to go to the URL for the page and ingest all of that HTML code. In the code below, we’re starting with our URL and using the read_html() function from rvest to ingest all of the page html, storing it as an object called results.
+
+```{r}
+# read in the html
+results <- courts_url |>
+  read_html()
+
+# display the html below
+results
+```
+
+In our environment window at right, you’ll see results as a “list of 2”.
+
+This is not a dataframe, it’s a different type of data structure a “nested list.”
+
+If we click on the name “results” in our environment window, we can see that it’s pulled in the html and shown us the general page structure. Nested within the <html> tag is the <head> and <body>, the two fundamental sections of most web pages. We’re going to pull information out of the <body> tag in a bit.
+
+Now, our task is to just pull out the section of the html that contains the information we need.
+
+But which part do we need from that mess of html code? To figure that out, we can go back to the page in a web browser like chrome, and use “inspect”.
+
+On the page, find the data we want to grab and right click on the word “Date” in the column header of the table. That will bring up a dropdown menu. Select “Inspect”, which will pop up a window called the “element inspector” that shows us where different elements on the page are located, what html tags created those elements, and other info.
+
+Note: another (probably less useful) method when dealing with easy-to-scrape data/info is to go back to "view page source" and ctrl+F for some of the text or numbers you're looking for.
+
+The table that we want is actually contained inside an html <table>. It has a <tbody> that contains one row <tr> per release.
+
+Because it’s inside of a table, and not some other kind of element (like a <div>), rvest has a special function for easily extracting and converting html tables, called html_table(). (We love it when developers use straightforward names.) This function extracts all the html tables on the page.
+
+```{r}
+# read in the html and extract all the tables
+results <- courts_url |>
+  read_html() |>
+  html_table()
+
+# show the dataframe
+
+results
+```
+
+In the environment window at right, look at results Note that it’s now a “list of 14”.
+
+This gets a little complicated, but what you’re seeing here is a nested list that contains one data frame – also called tibbles – one for each table that exists on the web page we scraped. There are tables for each year on the page, so we have 14 years’ worth of press releases.
+
+For now, let's just focus on the first table:
+
+```{r}
+# Just keep the first dataframe in our list
+
+results_2026 <- results[[1]]
+
+# show the dataframe
+
+results_2026
+
+```
+
+Awesome! 
+
+We now have a proper dataframe.
+
+From here, we can do a little cleaning. First we’ll use clean_names() to lower the column names. Then use rename() to replace the title column with a simpler version and properly format the date.
+
+```{r}
+results_2026_cleaned <- results_2026 |>
+  clean_names() |>
+  rename(title = news_release_news_item) |>
+  mutate(date = mdy(date))
+
+# show the dataframe
+results_2026_cleaned
+```
+
+And there we go. We now have a nice tidy dataframe of Maryland state court press releases. We could combine all of the tables from the webpage if we wanted to have the whole set.
+
+What about HTML that isn't stored neatly as a table? Or elements within the table that html_table() didn't extract? Well, that’s where things get a bit more complicated, and rely on your ability to read HTML and identify particular elements of it.
+
+For example, the table above contains only two columns: date and title.
+
+In our ideal data set, what else would it include? For starters, how about the url that each press release's title links to on the webpage?
+
+Let's go back to the "inspect" tool and figure out where that url is stored within the HTML.
+
+We can see that the urls are tied to the "href" attribute within <a> ("anchor") tags.
+
+html_table() only extracted the table contents, and not the urls stored in the table's href attributes.
+
+We can use html_element() after read_html() to extract both the contents and the links from that node.
+
+Extract the full table node:
+
+```{r}
+results <- courts_url |>
+  read_html()
+
+full_table_node_2026 <- html_elements(results, "table")[[1]]
+```
+
+extract the links:
+
+```{r}
+links_2026 <- full_table_node_2026 |>
+  html_elements("a") |>
+  html_attr("href") |>
+  url_absolute(courts_url)
+```
+
+add the links to our df:
+
+```{r}
+table_2026_w_urls <- table_2026 |>
+  mutate(url = links_2026)
+```
+
+What's the last thing that we'd ideally want in our df?
+
+Now that we have the urls, let's extract the text of those pages.
+
+Let's click on one of those links and identify where we need to extract the text from:
+
+https://www.courts.state.md.us/media/news/2026/pr20260514 
+
+It looks like we'll need to extract and combine the text from all of the <p> tags.
+
+```{r}
+press_release_url_example <- table_2026_w_urls$url[2]
+
+press_release_result <- read_html(press_release_url_example)
+
+press_release_text <- press_release_result %>%
+  html_elements("p")
+
+press_release_text
+```
+This returns another nested list of <p> nodes. We'll use sapply to extract the actual text from those nodes:
+
+```{r}
+paragraphs <- sapply(press_release_text, html_text2)
+
+paragraphs
+```
+Now let's clean the paragraphs by getting rid of a) empty paragraphs, b) newlines ("n/"), and c) paragraphs that start with "Contact Us" or "Copyright."
+
+```{r}
+paragraphs_clean <- paragraphs |>
+  str_replace_all("\n+", " ") |>
+  str_squish()
+
+paragraphs_clean <- paragraphs_clean[
+  paragraphs_clean != "" &
+    !str_detect(paragraphs_clean, regex("^Contact Us", ignore_case = TRUE)) &
+    !str_detect(paragraphs_clean, regex("^Copyright", ignore_case = TRUE))
+]
+
+paragraphs_clean
+```
+
+Finally, we'll collapse the list into a single string with paste():
+
+```{r}
+paragraphs_clean_combined <- paste(paragraphs_clean, collapse = " ")
+
+paragraphs_clean_combined
+```
+
+Great. Iterate through each of the press releases in our table, and apply the process we used above to add the full text for each one.
+
+Let's store the process/code we wrote above in a function:
+
+```{r}
+get_press_release_text <- function(url) {
+
+  page <- read_html(url)
+
+  press_release_text <- page |>
+    html_elements("p")
+
+  paragraphs <- sapply(
+    press_release_text,
+    html_text2
+  )
+
+  paragraphs <- paragraphs |>
+    str_replace_all("\n+", " ") |>
+    str_squish()
+
+  paragraphs <- paragraphs[
+    paragraphs != "" &
+    !str_detect(paragraphs, regex("^Contact Us", ignore_case = TRUE)) &
+    !str_detect(paragraphs, regex("^Copyright", ignore_case = TRUE))
+  ]
+
+  paste(paragraphs, collapse = " ")
+
+}
+```
+
+and apply the function to all of our rows using sapply:
+
+```{r}
+table_2026_complete <- table_2026_w_urls |>
+  mutate(
+    full_text = sapply(url, get_press_release_text)
+  )
+```
+
+Need to scrape something really specific? Running into issues because there are a lot of similar elements?
+
+Use "inspect," identify the node you want to scrape, then go up a few parent nodes. Right-click on the node and click "copy OuterHTML," and feed it into ChatGPT/Claude with a description of what you're trying to scrape within it.
+
+## Scraping with Playwright
+
+Some websites suck. Maybe the data is paginated. Maybe it's dynamically loaded, and the url alone doesn't produce the data you need within the page's source code. Maybe you need type, search, or click things to access all the data you want.
+
+Back in the day, one of the best options we had to accomplish these tasks was something called Selenium. Here's the problem: Selenium sucked too. It was tough to use, often broke down, and led to more than one laptop being thrown out of windows (I assume.)
+
+Here's the great news: we now have a new tool called Playwright that's way simpler, more user friendly, and more reliable.
+
+![Selenium is dead. Long live Playwright.](https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZXlkYTh0ZW9idTNpdWJ2ZGkwbTloOTNra3cybDV3a2l6ejlwZWkxaCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/1zRd5ZNo0s6kLPifL1/giphy.gif)
+
+
