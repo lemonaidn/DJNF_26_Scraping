@@ -318,8 +318,7 @@ Use "inspect," identify the node you want to scrape, then go up a few parent nod
 Load rplaywright:
 
 ```{r}
-#install.packages("rplaywright")
-library()
+library(rplaywright)
 ```
 
 
@@ -331,7 +330,11 @@ Here's the great news: we now have a new tool called Playwright that's WAY simpl
 
 ![Selenium is dead. Long live Playwright.](https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZXlkYTh0ZW9idTNpdWJ2ZGkwbTloOTNra3cybDV3a2l6ejlwZWkxaCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/1zRd5ZNo0s6kLPifL1/giphy.gif)
 
-I (and most people) typically work with Playwright in Python. However, some kind soul out there created an R wrapper for the tool, appropriately named rplaywright. We installed everything we need for this at the top of our Rmd, so now let's load the library.
+I (and most people) typically work with Playwright in Python. However, some kind soul out there created an R wrapper for the tool, appropriately named rplaywright.
+
+Disclaimer: rplaywright is awesome. But the Python Playwright library is even simpler and even more intuitive in some ways. And I say that despite being much more comfortable in R than Python myself! For the sake of staying consistent with the rest of the stuff you're learning this week by working in R, we're going to stick with the R package. But I'd encourage you to try out the Python library on your own later on!
+
+We installed everything we need for rplaywright at the top of our Rmd, so now let's load the package.
 
 ```{r}
 library(rplaywright)
@@ -552,7 +555,62 @@ If we wanted to get the full data set, we'd need to deal with pagination. The ne
 
 `<button class="pager__button " type="button" title="Next page"><svg data-prefix="fas" data-icon="angle-right" class="svg-inline--fa fa-angle-right" role="img" viewBox="0 0 256 512" aria-hidden="true"><path fill="currentColor" d="M247.1 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L179.2 256 41.9 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"></path></svg></button>`
 
-The easiest way to tackle this is to tell Playwright to locate and click where the class is "pager__button" and the title is "Next page".
+The easiest way to tackle this is to tell Playwright to locate and click the button where the class is "pager__button" and the title is "Next page".
+
+```{r}
+chrome <- new_chromium()           
+context <- chrome$new_context()$then()
+page <- context$new_page()$then()
+page$goto("https://www.usaspending.gov/recipient")$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+page$locator(".usa-dt-tab:has-text('Grants')")$click()$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+# Click on the "Next page" button
+page$locator(".pager__button[title='Next page']")$click()$then()
+
+
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(5)
+# close chromium
+chrome$close()$then()
+
+```
+
+Whoops! Something went wrong... the next page button never got clicked. This is actually a real error I ran into when setting up this notebook. Thankfully, if we check the error message above, Playwright tells us exactly what went wrong: there are TWO next page buttons, one at the top of the data and one at the bottom. By default, if Playwright runs into more than one element that meets the criteria you gave it, it'll just throw its hands in the air and do nothing rather than guess which one you want it to interact with.
+
+We can fix this by adding $first() to explicitly target the first one:
+
+```{r}
+chrome <- new_chromium()           
+context <- chrome$new_context()$then()
+page <- context$new_page()$then()
+page$goto("https://www.usaspending.gov/recipient")$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+page$locator(".usa-dt-tab:has-text('Grants')")$click()$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+# Click on the FIRST "Next page" button
+page$locator(".pager__button[title='Next page']")$first()$click()$then()
+
+
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+# close chromium
+chrome$close()$then()
+```
+
+That worked, but if we wanted to get all the data, we need a way to tell Playwright to just keep on pressing the next page button until it can't be pressed anymore.
+
+At that point, the HTML for the button becomes: 
+
+<button class="pager__button pager__button_disabled" type="button" title="Next page" disabled="">
+
+Each time we click the next page button, we're going to the Playwright to check whether the button on the new page has the "disabled" class. If it doesn't, it'll keep pressing the button. If it does, we're going to stop trying to hit the button.
 
 ```{r}
 chrome <- new_chromium()           
@@ -567,16 +625,192 @@ Sys.sleep(2)
 
 
 
-# Click on the "Next page" button
-page$locator(".pager__button[title='Next page']")$click()$then()
+# keep hitting the Next page button until it's disabled
+while (TRUE) {
+  btn_class <- page$locator(".pager__button[title='Next page']")$first()$get_attribute("class")$then()
+  if (grepl("pager__button_disabled", btn_class)) break
+  
+  page$locator(".pager__button[title='Next page']")$first()$click()$then()
+  page$wait_for_load_state("networkidle")$then()
+  Sys.sleep(2)
+}
 
 
 
+chrome$close()$then()
+```
 
+We're not going to wait for Playwright to work its way through 1200+ pages, so for the sake of our testing, let's have Playwright load the page, click next page a couple times, then click the last defined page number, and make sure it finally closes when the next page button is disabled.
+
+```{r}
+library(rvest)
+library(rplaywright)
+
+# Launch a new Chrome browser window
+chrome <- new_chromium()           
+context <- chrome$new_context()$then()
+page <- context$new_page()$then()
+
+# Navigate to the USASpending recipient page and wait for it to fully load
+page$goto("https://www.usaspending.gov/recipient")$then()
 page$wait_for_load_state("networkidle")$then()
 Sys.sleep(2)
-# close chromium
+
+# Click the Grants tab and wait for the grants data to load
+page$locator(".usa-dt-tab:has-text('Grants')")$click()$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+all_tables <- list()
+
+# Extract page 1, then click next
+all_tables <- append(all_tables, list(read_html(page$content()$then()) |> html_table() |> _[[1]]))
+page$locator(".pager__button[title='Next page']")$first()$click()$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+# Extract page 2, then click next
+all_tables <- append(all_tables, list(read_html(page$content()$then()) |> html_table() |> _[[1]]))
+page$locator(".pager__button[title='Next page']")$first()$click()$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+# Extract page 3, then jump to the last page by clicking the second to last pagination button.
+# We use JavaScript here because rplaywright doesn't have a built-in way
+# to select elements by their position relative to other elements.
+all_tables <- append(all_tables, list(read_html(page$content()$then()) |> html_table() |> _[[1]]))
+page$evaluate("() => {
+  const items = document.querySelectorAll('.pager .pager__item')
+  items[items.length - 2].querySelector('button').click()
+}")$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+# Extract the last page
+all_tables <- append(all_tables, list(read_html(page$content()$then()) |> html_table() |> _[[1]]))
+
+# Combine all extracted tables into a single data frame
+final_table <- do.call(rbind, all_tables)
+
+# Close the browser
+chrome$close()$then()
+```
+
+Note: this is one big spot where the python library would have made things simpler. To select an element based on its position relative to other elements (second to last), we had to use $evaluate and then run a small piece of JavaScript directly inside the browser. (Disclaimer: I don't kow JS! Claude saved me on this one.)
+
+Python's Playwright has nth(), which lets you just select an element by its position:
+
+`await page.locator(".pager .pager__item").nth(-2).locator("button").click()`
+
+But let's get back to our R code. Now that the pagination is working, let's wrap up by re-incorporating extracting the html and pulling out the table from each page we load.
+
+Here's our full code. By now, it's a bit of a doozy. I've added comments throughout so we have each step explained along the way:
+
+```{r}
+library(rvest)
+library(rplaywright)
+
+# Launch a new Chrome browser window
+chrome <- new_chromium()           
+context <- chrome$new_context()$then()
+page <- context$new_page()$then()
+
+# Navigate to the USASpending recipient page and wait for it to fully load
+page$goto("https://www.usaspending.gov/recipient")$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+# Click the Grants tab and wait for the grants data to load
+page$locator(".usa-dt-tab:has-text('Grants')")$click()$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+all_tables <- list()
+
+# Extract the HTML from the current page: page$content()...
+# That HTML get passed into rvest's read_html(), which produces a list...
+# we then use rvest and the pipe operator to extract the first (and only) element within the list we created above, the data table, using |> html_table() |> _[[1]]))...
+# and append it to our all_tables list with append()
+# then click next to move to page 2
+all_tables <- append(all_tables, list(read_html(page$content()$then()) |> html_table() |> _[[1]]))
+page$locator(".pager__button[title='Next page']")$first()$click()$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+# Extract page 2, then click next
+all_tables <- append(all_tables, list(read_html(page$content()$then()) |> html_table() |> _[[1]]))
+page$locator(".pager__button[title='Next page']")$first()$click()$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+# Extract page 3, then jump to the last page by clicking the second to last pagination button.
+# We use JavaScript here because rplaywright doesn't have a built-in way to select elements by their position relative to other elements.
+all_tables <- append(all_tables, list(read_html(page$content()$then()) |> html_table() |> _[[1]]))
+page$evaluate("() => {
+  const items = document.querySelectorAll('.pager .pager__item')
+  items[items.length - 2].querySelector('button').click()
+}")$then()
+page$wait_for_load_state("networkidle")$then()
+Sys.sleep(2)
+
+# Extract the last page
+all_tables <- append(all_tables, list(read_html(page$content()$then()) |> html_table() |> _[[1]]))
+
+# Combine all extracted tables into a single data frame
+final_table <- do.call(rbind, all_tables)
+
+# Close the browser
 chrome$close()$then()
 
+```
+
+```{r}
+final_table
+```
 
 
+We did it! Now let's just clean up the column names.
+
+```{r}
+final_table_clean <- final_table |> rename(
+  "Recipient Name" = 1,
+  "UEI" = 2,
+  "Legacy DUNS" = 3,
+  "Awarded Amount" = 4
+)
+```
+
+```{r}
+final_table_clean
+```
+
+
+### Scraping PDFs
+
+Back in the day (like, this past semester), the portion of UMD's main Data Journalism course that's dedicated to extracting data from PDFs focused on a tool called Tabula.
+
+For years, Tabula was the go-to way to turn data tables from PDFs into data tables you can actually work with. It was revolutionary when it first came out. Finally, no more manual data entry!
+
+Sadly, Tabula's time in the modern data journalist's toolkit is coming to an end. Why? Well, a few reasons:
+
+1) Tabula is a manual process. That's a problem for a whole lot of reasons on its own. What if you accidentally selected the wrong area and cut off some of the data (whoops)? What if you or someone else needs to check or reproduce your work (there's no code to check)? What if you need to set up a pipeline to extract data from PDFs on a recurring basis (you'd have to do it manually every time)?
+
+2) LLM's are becoming very, very good at accurately extracting structured and unstructured data from PDFs
+
+Other speakers this week will likely cover processing PDFs with AI tools. (If they don't, reach out to me! We can walk through it together).
+
+Still, there are a few reasons why you might want to avoid using an LLM for this task. First, maybe you don't want to spend money (especially when it's your own money). Second, you need really solidly CONSISTENT output (even if it's not the BEST output). LLM's might still produce slightly different outputs each time the process is run, even if the prompt is exactly the same.
+
+To solve that problem, we'll briefly touch on a tool called... well, pdftools.
+
+
+
+
+
+
+
+Questions? Comments? Hate mail? Wanna sign me up for annoying political fundraising emails?
+
+Aidan Hughes
+`athughes@umd.edu`
+or (if you want to discuss a sensitive project and want to avoid having your emails subject to Maryland public records laws): `aidthughes@gmail.com`
